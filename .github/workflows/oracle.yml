@@ -22,34 +22,39 @@ jobs:
 
       - name: Run Instance Catcher
         env:
-          OCI_USER: ${{ secrets.OCI_USER_IN }}
-          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT_IN }}
-          OCI_TENANCY: ${{ secrets.OCI_TENANCY_IN }}
-          OCI_REGION: ${{ secrets.OCI_REGION_IN }}
-          OCI_KEY: ${{ secrets.OCI_KEY_IN }}
+          OCI_USER_IN: ${{ secrets.OCI_USER_IN }}
+          OCI_FINGERPRINT_IN: ${{ secrets.OCI_FINGERPRINT_IN }}
+          OCI_TENANCY_IN: ${{ secrets.OCI_TENANCY_IN }}
+          OCI_REGION_IN: ${{ secrets.OCI_REGION_IN }}
+          OCI_KEY_IN: ${{ secrets.OCI_KEY_IN }}
         run: |
           # 1. Create the secure directory Oracle expects
           mkdir -p ~/.oci
           
           # 2. Write the private key file out to disk
-          echo "$OCI_KEY" > ~/.oci/private_key.pem
+          echo "$OCI_KEY_IN" > ~/.oci/private_key.pem
           chmod 600 ~/.oci/private_key.pem
           
           # 3. Dynamically generate the precise config profile the Python script reads
           echo "[DEFAULT]" > ~/.oci/config
-          echo "user=$OCI_USER" >> ~/.oci/config
-          echo "fingerprint=$OCI_FINGERPRINT" >> ~/.oci/config
-          echo "tenancy=$OCI_TENANCY" >> ~/.oci/config
-          echo "region=$OCI_REGION" >> ~/.oci/config
+          echo "user=$OCI_USER_IN" >> ~/.oci/config
+          echo "fingerprint=$OCI_FINGERPRINT_IN" >> ~/.oci/config
+          echo "tenancy=$OCI_TENANCY_IN" >> ~/.oci/config
+          echo "region=$OCI_REGION_IN" >> ~/.oci/config
           echo "key_file=~/.oci/private_key.pem" >> ~/.oci/config
           
-          # 4. Generate the environment properties the bot initializes
-          echo "OCI_CONFIG=~/.oci/config" > oci.env
-          echo "OCI_COMPUTE_SHAPE=VM.Standard.A1.Flex" >> oci.env
-          echo "OCT_FREE_AD=AD-1,AD-2,AD-3" >> oci.env
-          echo "DISPLAY_NAME=BeyondDepthsServer" >> oci.env
-          echo "REQUEST_WAIT_TIME_SECS=60" >> oci.env
-          echo "BOOT_VOLUME_SIZE=50" >> oci.env
+          # 4. Generate the exact environment variables the bot initializes
+          export OCI_USER_ID="$OCI_USER_IN"
+          export OCI_TENANCY_ID="$OCI_TENANCY_IN"
+          export OCI_FINGERPRINT="$OCI_FINGERPRINT_IN"
+          export OCI_REGION="$OCI_REGION_IN"
+          export OCI_COMPARTMENT_ID="$OCI_TENANCY_IN"
+          
+          export OCI_SHAPE="VM.Standard.A1.Flex"
+          export OCI_OCPUS="2"
+          export OCI_MEMORY_IN_GBS="12"
+          export OCI_BOOT_VOLUME_SIZE_IN_GBS="50"
+          export DISPLAY_NAME="BeyondDepthsServer"
           
           # 5. Run the core process
-          python main.py || python bot.py
+          python main.py
