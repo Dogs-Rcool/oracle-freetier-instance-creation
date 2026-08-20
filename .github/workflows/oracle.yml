@@ -28,30 +28,44 @@ jobs:
           OCI_REGION_IN: ${{ secrets.OCI_REGION_IN }}
           OCI_KEY_IN: ${{ secrets.OCI_KEY_IN }}
         run: |
-          # 1. Create the local private key file exactly where the local script expects it
-          echo "$OCI_KEY_IN" > ./private_key.pem
-          chmod 600 ./private_key.pem
+          # Use Python directly to write a perfectly formatted oci_config and .env file
+          python -c '
+          import os
           
-          # 2. Generate the exact 'oci_config' file path layout the python error requested
-          echo "[DEFAULT]" > ./oci_config
-          echo "user=$OCI_USER_IN" >> ./oci_config
-          echo "fingerprint=$OCI_FINGERPRINT_IN" >> ./oci_config
-          echo "tenancy=$OCI_TENANCY_IN" >> ./oci_config
-          echo "region=$OCI_REGION_IN" >> ./oci_config
-          echo "key_file=./private_key.pem" >> ./oci_config
+          # Write the private key file
+          with open("private_key.pem", "w") as f:
+              f.write(os.environ["OCI_KEY_IN"].strip())
+          os.chmod("private_key.pem", 0o600)
           
-          # 3. Generate the supplementary environment parameters for runtime initialization
-          echo "OCI_USER_ID=$OCI_USER_IN" > .env
-          echo "OCI_TENANCY_ID=$OCI_TENANCY_IN" >> .env
-          echo "OCI_FINGERPRINT=$OCI_FINGERPRINT_IN" >> .env
-          echo "OCI_REGION=$OCI_REGION_IN" >> .env
-          echo "OCI_COMPARTMENT_ID=$OCI_TENANCY_IN" >> .env
-          echo "OCI_SHAPE=VM.Standard.A1.Flex" >> .env
-          echo "OCI_OCPUS=2" >> .env
-          echo "OCI_MEMORY_IN_GBS=12" >> .env
-          echo "OCI_BOOT_VOLUME_SIZE_IN_GBS=50" >> .env
-          echo "DISPLAY_NAME=BeyondDepthsServer" >> .env
-          echo "INSTANCES_TO_CREATE=1" >> .env
+          # Write the oci_config file exactly how the OCI SDK requires it
+          config_content = (
+              "[DEFAULT]\n"
+              f"user={os.environ[\"OCI_USER_IN\"].strip()}\n"
+              f"fingerprint={os.environ[\"OCI_FINGERPRINT_IN\"].strip()}\n"
+              f"tenancy={os.environ[\"OCI_TENANCY_IN\"].strip()}\n"
+              f"region={os.environ[\"OCI_REGION_IN\"].strip()}\n"
+              "key_file=./private_key.pem\n"
+          )
+          with open("oci_config", "w") as f:
+              f.write(config_content)
+              
+          # Write the environment runtime configurations
+          env_content = (
+              f"OCI_USER_ID={os.environ[\"OCI_USER_IN\"].strip()}\n"
+              f"OCI_TENANCY_ID={os.environ[\"OCI_TENANCY_IN\"].strip()}\n"
+              f"OCI_FINGERPRINT={os.environ[\"OCI_FINGERPRINT_IN\"].strip()}\n"
+              f"OCI_REGION={os.environ[\"OCI_REGION_IN\"].strip()}\n"
+              f"OCI_COMPARTMENT_ID={os.environ[\"OCI_TENANCY_IN\"].strip()}\n"
+              "OCI_SHAPE=VM.Standard.A1.Flex\n"
+              "OCI_OCPUS=2\n"
+              "OCI_MEMORY_IN_GBS=12\n"
+              "OCI_BOOT_VOLUME_SIZE_IN_GBS=50\n"
+              "DISPLAY_NAME=BeyondDepthsServer\n"
+              "INSTANCES_TO_CREATE=1\n"
+          )
+          with open(".env", "w") as f:
+              f.write(env_content)
+          '
           
-          # 4. Run the core process
+          # Execute the core process
           python main.py
