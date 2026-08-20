@@ -18,29 +18,38 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install oci
+          pip install oci python-dotenv requests paramiko
 
       - name: Run Instance Catcher
         env:
-          # Your Secure API Login Keys
           OCI_USER: ${{ secrets.OCI_USER_IN }}
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT_IN }}
           OCI_TENANCY: ${{ secrets.OCI_TENANCY_IN }}
           OCI_REGION: ${{ secrets.OCI_REGION_IN }}
           OCI_KEY: ${{ secrets.OCI_KEY_IN }}
-          
-          # Crucial Minecraft Hardware Settings
-          OCI_COMPARTMENT: ${{ secrets.OCI_TENANCY_IN }} # Uses your tenancy ID as root compartment
-          OCI_SHAPE: "VM.Standard.A1.Flex"
-          OCI_OCPUS: "2"
-          OCI_MEMORY_IN_GBS: "12"
-          OCI_BOOT_VOLUME_SIZE_IN_GBS: "50"
-          
-          # Operating System Configuration (Ubuntu 22.04 Minimal Minimal ARM)
-          # These exact fallback parameters help the backend script jump straight to deployment execution
-          OCI_IMAGE_ID: ""
-          OCI_SUBNET_ID: ""
         run: |
-          echo "$OCI_KEY" > ./private_key.pem
-          chmod 600 ./private_key.pem
-          python bot.py
+          # 1. Create the secure directory Oracle expects
+          mkdir -p ~/.oci
+          
+          # 2. Write the private key file out to disk
+          echo "$OCI_KEY" > ~/.oci/private_key.pem
+          chmod 600 ~/.oci/private_key.pem
+          
+          # 3. Dynamically generate the precise config profile the Python script reads
+          echo "[DEFAULT]" > ~/.oci/config
+          echo "user=$OCI_USER" >> ~/.oci/config
+          echo "fingerprint=$OCI_FINGERPRINT" >> ~/.oci/config
+          echo "tenancy=$OCI_TENANCY" >> ~/.oci/config
+          echo "region=$OCI_REGION" >> ~/.oci/config
+          echo "key_file=~/.oci/private_key.pem" >> ~/.oci/config
+          
+          # 4. Generate the environment properties the bot initializes
+          echo "OCI_CONFIG=~/.oci/config" > oci.env
+          echo "OCI_COMPUTE_SHAPE=VM.Standard.A1.Flex" >> oci.env
+          echo "OCT_FREE_AD=AD-1,AD-2,AD-3" >> oci.env
+          echo "DISPLAY_NAME=BeyondDepthsServer" >> oci.env
+          echo "REQUEST_WAIT_TIME_SECS=60" >> oci.env
+          echo "BOOT_VOLUME_SIZE=50" >> oci.env
+          
+          # 5. Run the core process
+          python main.py || python bot.py
