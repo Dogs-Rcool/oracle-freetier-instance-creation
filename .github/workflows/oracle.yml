@@ -16,8 +16,8 @@ jobs:
           OCI_REGION: ${{ secrets.OCI_REGION_IN }}
           OCI_KEY: ${{ secrets.OCI_KEY_IN }}
         run: |
-          # 1. Install official Oracle OCI CLI Engine into local runtime paths
-          curl -sL https://githubusercontent.com | bash -s -- --accept-all-defaults
+          # 1. Install Oracle OCI CLI via standard Linux system commands natively
+          sudo apt-get update && sudo apt-get install -y manual oci-cli
           
           # 2. Deploy Secure Access Profiles directly in position
           mkdir -p ~/.oci
@@ -32,13 +32,12 @@ jobs:
           echo "key_file=~/.oci/private_key.pem" >> ~/.oci/config
           chmod 600 ~/.oci/config
 
-          # 3. Pull the official network configuration data maps using the absolute tool path
-          SUBNET_ID=$(/home/runner/bin/oci network subnet list --compartment-id "$OCI_TENANCY" --query "data[0].id" --raw-output)
-          IMAGE_ID=$(/home/runner/bin/oci compute image list --compartment-id "$OCI_TENANCY" --operating-system "Canonical Ubuntu" --operating-system-version "22.04" --query "data[0].id" --raw-output 2>/dev/null || echo "")
+          # 3. Pull the official network configuration data maps
+          SUBNET_ID=$(oci network subnet list --compartment-id "$OCI_TENANCY" --query "data[0].id" --raw-output 2>/dev/null || echo "")
           
           if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ]; then
-            # Attempt fallback list query if structure parsing varies
-            SUBNET_ID=$(/home/runner/bin/oci network subnet list --compartment-id "$OCI_TENANCY" --query "data.id" --raw-output | head -n 1 || echo "")
+            # Attempt broader dynamic search across the compartment if initial index varies
+            SUBNET_ID=$(oci network subnet list --compartment-id "$OCI_TENANCY" --all --query "data[*].id" --raw-output | head -n 1 || echo "")
           fi
           
           if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ]; then
@@ -46,22 +45,26 @@ jobs:
             exit 1
           fi
           
+          # 4. Pull dynamic Ubuntu 22.04 structural image profiles
+          IMAGE_ID=$(oci compute image list --compartment-id "$OCI_TENANCY" --operating-system "Canonical Ubuntu" --operating-system-version "22.04" --query "data[0].id" --raw-output 2>/dev/null || echo "")
+          
           if [ -z "$IMAGE_ID" ] || [ "$IMAGE_ID" == "null" ]; then
-            IMAGE_ID=$(/home/runner/bin/oci compute image list --compartment-id "$OCI_TENANCY" --shape "VM.Standard.A1.Flex" --query "data[0].id" --raw-output 2>/dev/null || echo "")
+             # Dynamic fallback array check for structural ARM shapes
+             IMAGE_ID=$(oci compute image list --compartment-id "$OCI_TENANCY" --shape "VM.Standard.A1.Flex" --query "data[0].id" --raw-output 2>/dev/null || echo "")
           fi
 
-          # Fallback default image ID for Melbourne data center if query profiles fail mapping
           if [ -z "$IMAGE_ID" ] || [ "$IMAGE_ID" == "null" ]; then
-             IMAGE_ID="ocid1.image.oc1.ap-melbourne-1.aaaaaaaa"
+             echo "Image error: Baseline OS layout profile could not be resolved from your home data feed."
+             exit 1
           fi
 
-          # 4. Fetch the data center availability domain name string dynamically
-          AD_NAME=$(/home/runner/bin/oci iam availability-domain list --query "data[0].name" --raw-output)
+          # 5. Fetch the data center availability domain name string dynamically
+          AD_NAME=$(oci iam availability-domain list --query "data[0].name" --raw-output)
 
           echo "Identity configurations validated. Initiating slot availability scans for $AD_NAME..."
           
-          # 5. Execute core infrastructure generation build directly
-          RESPONSE=$(/home/runner/bin/oci compute instance launch \
+          # 6. Execute core infrastructure generation build directly
+          RESPONSE=$(oci compute instance launch \
             --compartment-id "$OCI_TENANCY" \
             --availability-domain "$AD_NAME" \
             --display-name "BeyondDepthsServer" \
@@ -71,7 +74,7 @@ jobs:
             --image-id "$IMAGE_ID" \
             --assign-public-ip true 2>&1)
             
-          # 6. Parse server volume results cleanly
+          # 7. Parse server volume results cleanly
           if echo "$RESPONSE" | grep -E -q "Out of capacity|LimitExceeded|TooManyRequests|404|NotAuthorizedOrNotFound"; then
             echo "STATUS: Out of Capacity in your region. Retrying on the next hourly clock trigger."
           elif echo "$RESPONSE" | grep -q "id"; then
