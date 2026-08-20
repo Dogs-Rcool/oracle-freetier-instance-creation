@@ -32,6 +32,11 @@ jobs:
           python -c '
           import os
           
+          # Get absolute full working paths to satisfy Oracle SDK path checking
+          cwd = os.getcwd()
+          key_path = os.path.join(cwd, "private_key.pem")
+          config_path = os.path.join(cwd, "oci_config")
+          
           # Clean inputs by stripping whitespaces securely
           user_id = os.environ["OCI_USER_IN"].strip()
           fingerprint = os.environ["OCI_FINGERPRINT_IN"].strip()
@@ -40,20 +45,20 @@ jobs:
           private_key = os.environ["OCI_KEY_IN"].strip()
           
           # Write the private key file out to disk
-          with open("private_key.pem", "w") as f:
+          with open(key_path, "w") as f:
               f.write(private_key)
-          os.chmod("private_key.pem", 0o600)
+          os.chmod(key_path, 0o600)
           
-          # Write the oci_config file without nested backslashes
+          # Write the oci_config file using full absolute paths
           config_content = (
               "[DEFAULT]\n"
               f"user={user_id}\n"
               f"fingerprint={fingerprint}\n"
               f"tenancy={tenancy}\n"
               f"region={region}\n"
-              "key_file=./private_key.pem\n"
+              f"key_file={key_path}\n"
           )
-          with open("oci_config", "w") as f:
+          with open(config_path, "w") as f:
               f.write(config_content)
               
           # Write the environment runtime configurations for main.py
