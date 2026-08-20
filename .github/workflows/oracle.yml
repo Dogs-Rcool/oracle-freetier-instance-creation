@@ -16,10 +16,10 @@ jobs:
           OCI_REGION: ${{ secrets.OCI_REGION_IN }}
           OCI_KEY: ${{ secrets.OCI_KEY_IN }}
         run: |
-          # 1. Install Oracle OCI CLI via Python's universal tool manager instantly
+          # 1. Install Oracle OCI CLI instantly
           pip install oci-cli
           
-          # 2. Deploy Secure Access Profiles directly in position
+          # 2. Deploy Secure Access Profiles
           mkdir -p ~/.oci
           echo "$OCI_KEY" > ~/.oci/private_key.pem
           chmod 600 ~/.oci/private_key.pem
@@ -32,35 +32,37 @@ jobs:
           echo "key_file=~/.oci/private_key.pem" >> ~/.oci/config
           chmod 600 ~/.oci/config
 
-          # 3. Pull the official network configuration data maps
+          echo "Checking for existing public subnets..."
           SUBNET_ID=$(oci network subnet list --compartment-id "$OCI_TENANCY" --query "data[0].id" --raw-output 2>/dev/null || echo "")
-          
-          if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ]; then
-            SUBNET_ID=$(oci network subnet list --compartment-id "$OCI_TENANCY" --query "data.id" --raw-output 2>/dev/null || echo "")
+
+          # 3. Dynamic Build Step: If your account has no network, create a permanent VCN and Subnet automatically
+          if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ] || [ "$SUBNET_ID" == "" ]; then
+            echo "No network found. Automatically building a permanent Virtual Cloud Network (VCN)..."
+            VCN_ID=$(oci network vcn create --compartment-id "$OCI_TENANCY" --cidr-block "10.0.0.0/16" --display-name "Minecraft_Network" --query "data.id" --raw-output)
+            
+            echo "Building a permanent public subnet infrastructure..."
+            SUBNET_ID=$(oci network subnet create --compartment-id "$OCI_TENANCY" --vcn-id "$VCN_ID" --cidr-block "10.0.0.0/24" --display-name "Minecraft_Public_Subnet" --query "data.id" --raw-output)
+            
+            echo "Deploying internet gateway routing..."
+            IG_ID=$(oci network internet-gateway create --compartment-id "$OCI_TENANCY" --vcn-id "$VCN_ID" --is-enabled true --display-name "Minecraft_Gateway" --query "data.id" --raw-output)
+            RT_ID=$(oci network vcn get --vcn-id "$VCN_ID" --query "data.\"default-route-table-id\"" --raw-output)
+            oci network route-table update --rt-id "$RT_ID" --route-rules "[{\"cidrBlock\":\"0.0.0.0/0\",\"nextHopIds\":\"$IG_ID\"}]" > /dev/null
+          else
+            echo "Existing public subnet found: $SUBNET_ID"
           fi
-          
-          if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ]; then
-            echo "Network error: Baseline public subnet missing from lookup indexes."
-            exit 1
-          fi
-          
-          # 4. Pull dynamic Ubuntu 22.04 structural image profiles
+
+          # 4. Resolve baseline processing OS image rules
           IMAGE_ID=$(oci compute image list --compartment-id "$OCI_TENANCY" --operating-system "Canonical Ubuntu" --operating-system-version "22.04" --query "data[0].id" --raw-output 2>/dev/null || echo "")
-          
-          if [ -z "$IMAGE_ID" ] || [ "$IMAGE_ID" == "null" ]; then
+          if [ -z "$IMAGE_ID" ] || [ "$IMAGE_ID" == "null" ] || [ "$IMAGE_ID" == "" ]; then
              IMAGE_ID=$(oci compute image list --compartment-id "$OCI_TENANCY" --shape "VM.Standard.A1.Flex" --query "data[0].id" --raw-output 2>/dev/null || echo "")
           fi
 
-          if [ -z "$IMAGE_ID" ] || [ "$IMAGE_ID" == "null" ]; then
-             IMAGE_ID=$(oci compute image list --compartment-id "$OCI_TENANCY" --shape "VM.Standard.A1.Flex" --query "data.id" --raw-output 2>/dev/null || echo "")
-          fi
+          # 5. Fetch Availability Domain data string dynamically
+          AD_NAME=$(oci iam availability-domain list --query "data[0].name" --raw-output)
 
-          # 5. Fetch the data center availability domain name string dynamically
-          AD_NAME=$(oci iam availability-domain list --query "data[0].name" --raw-output 2>/dev/null || oci iam availability-domain list --query "data.name" --raw-output)
-
-          echo "Identity configurations validated. Initiating slot availability scans for $AD_NAME..."
+          echo "Network configurations secured. Initiating slot availability scans for $AD_NAME..."
           
-          # 6. Execute core infrastructure generation build directly
+          # 6. Run the generation query directly against native endpoints
           RESPONSE=$(oci compute instance launch \
             --compartment-id "$OCI_TENANCY" \
             --availability-domain "$AD_NAME" \
