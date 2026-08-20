@@ -15,6 +15,7 @@ jobs:
           OCI_TENANCY: ${{ secrets.OCI_TENANCY_IN }}
           OCI_REGION: ${{ secrets.OCI_REGION_IN }}
           OCI_KEY: ${{ secrets.OCI_KEY_IN }}
+          SUPPRESS_API_KEY_WARNING: "True" # Silences key security prompts cleanly
         run: |
           # 1. Install Oracle OCI CLI instantly
           pip install oci-cli
@@ -32,37 +33,36 @@ jobs:
           echo "key_file=~/.oci/private_key.pem" >> ~/.oci/config
           chmod 600 ~/.oci/config
 
-          echo "Checking for existing public subnets..."
+          echo "Scanning configuration mapping balances..."
           SUBNET_ID=$(oci network subnet list --compartment-id "$OCI_TENANCY" --query "data[0].id" --raw-output 2>/dev/null || echo "")
 
-          # 3. Dynamic Build Step: If your account has no network, create a permanent VCN and Subnet automatically
+          # 3. Handle Auto-Network Checks With Force Bypasses
           if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ] || [ "$SUBNET_ID" == "" ]; then
-            echo "No network found. Automatically building a permanent Virtual Cloud Network (VCN)..."
+            echo "No network found. Building automated Virtual Cloud Network (VCN)..."
             VCN_ID=$(oci network vcn create --compartment-id "$OCI_TENANCY" --cidr-block "10.0.0.0/16" --display-name "Minecraft_Network" --query "data.id" --raw-output)
             
-            echo "Building a permanent public subnet infrastructure..."
+            echo "Building standard public subnet structures..."
             SUBNET_ID=$(oci network subnet create --compartment-id "$OCI_TENANCY" --vcn-id "$VCN_ID" --cidr-block "10.0.0.0/24" --display-name "Minecraft_Public_Subnet" --query "data.id" --raw-output)
             
-            echo "Deploying internet gateway routing..."
+            echo "Deploying internet gateway configuration..."
             IG_ID=$(oci network internet-gateway create --compartment-id "$OCI_TENANCY" --vcn-id "$VCN_ID" --is-enabled true --display-name "Minecraft_Gateway" --query "data.id" --raw-output)
             RT_ID=$(oci network vcn get --vcn-id "$VCN_ID" --query "data.\"default-route-table-id\"" --raw-output)
-            oci network route-table update --rt-id "$RT_ID" --route-rules "[{\"cidrBlock\":\"0.0.0.0/0\",\"nextHopIds\":\"$IG_ID\"}]" > /dev/null
+            
+            # The Critical Fix: Added --force override flag to stop the interactive prompt crash
+            oci network route-table update --rt-id "$RT_ID" --route-rules "[{\"cidrBlock\":\"0.0.0.0/0\",\"nextHopIds\":\"$IG_ID\"}]" --force > /dev/null
           else
-            echo "Existing public subnet found: $SUBNET_ID"
+            echo "Verified active network configuration found: $SUBNET_ID"
           fi
 
-          # 4. Resolve baseline processing OS image rules
-          IMAGE_ID=$(oci compute image list --compartment-id "$OCI_TENANCY" --operating-system "Canonical Ubuntu" --operating-system-version "22.04" --query "data[0].id" --raw-output 2>/dev/null || echo "")
-          if [ -z "$IMAGE_ID" ] || [ "$IMAGE_ID" == "null" ] || [ "$IMAGE_ID" == "" ]; then
-             IMAGE_ID=$(oci compute image list --compartment-id "$OCI_TENANCY" --shape "VM.Standard.A1.Flex" --query "data[0].id" --raw-output 2>/dev/null || echo "")
-          fi
+          # 4. Use the absolute fallback image ID string directly to prevent image API scanning bugs
+          IMAGE_ID="ocid1.image.oc1.ap-melbourne-1.aaaaaaaaaxmpxmvyq3y34mzyoxbbykxl23hmdskg7xby6pxt4b7f43y2jmaq"
 
           # 5. Fetch Availability Domain data string dynamically
-          AD_NAME=$(oci iam availability-domain list --query "data[0].name" --raw-output)
+          AD_NAME=$(oci iam availability-domain list --query "data[0].name" --raw-output 2>/dev/null || oci iam availability-domain list --query "data.name" --raw-output)
 
-          echo "Network configurations secured. Initiating slot availability scans for $AD_NAME..."
+          echo "Network configurations locked. Initiating server slot allocation scans for $AD_NAME..."
           
-          # 6. Run the generation query directly against native endpoints
+          # 6. Request the server build directly from native endpoints
           RESPONSE=$(oci compute instance launch \
             --compartment-id "$OCI_TENANCY" \
             --availability-domain "$AD_NAME" \
@@ -73,11 +73,11 @@ jobs:
             --image-id "$IMAGE_ID" \
             --assign-public-ip true 2>&1)
             
-          # 7. Parse server volume results cleanly
+          # 7. Check server volume results cleanly
           if echo "$RESPONSE" | grep -E -q "Out of capacity|LimitExceeded|TooManyRequests|404|NotAuthorizedOrNotFound"; then
-            echo "STATUS: Out of Capacity in your region. Retrying on the next hourly clock trigger."
+            echo "STATUS: Out of Capacity in Melbourne. Automated script successfully completed this hours attempt and will cycle again on the next hour."
           elif echo "$RESPONSE" | grep -q "id"; then
-            echo "SUCCESS! Your high-RAM server slot has been claimed successfully."
+            echo "SUCCESS! Your 12GB high-performance server slot has been claimed successfully!"
           else
-            echo "Platform Warning Log: $RESPONSE"
+            echo "Oracle Cloud Infrastructure Response Profile: $RESPONSE"
           fi
