@@ -15,9 +15,9 @@ jobs:
           OCI_TENANCY: ${{ secrets.OCI_TENANCY_IN }}
           OCI_REGION: ${{ secrets.OCI_REGION_IN }}
           OCI_KEY: ${{ secrets.OCI_KEY_IN }}
-          SUPPRESS_API_KEY_WARNING: "True" # Silences key security prompts cleanly
+          SUPPRESS_API_KEY_WARNING: "True"
         run: |
-          # 1. Install Oracle OCI CLI instantly
+          # 1. Install Oracle OCI CLI instantly via pip
           pip install oci-cli
           
           # 2. Deploy Secure Access Profiles
@@ -33,10 +33,14 @@ jobs:
           echo "key_file=~/.oci/private_key.pem" >> ~/.oci/config
           chmod 600 ~/.oci/config
 
-          echo "Scanning configuration mapping balances..."
-          SUBNET_ID=$(oci network subnet list --compartment-id "$OCI_TENANCY" --query "data[0].id" --raw-output 2>/dev/null || echo "")
+          # 3. Generate a dedicated SSH access key pair for server log connections automatically
+          ssh-keygen -t rsa -N "" -f ./minecraft_ssh_key
+          SSH_PUBLIC_KEY_DATA=$(cat ./minecraft_ssh_key.pub)
 
-          # 3. Handle Auto-Network Checks With Force Bypasses
+          echo "Scanning configuration mapping balances..."
+          SUBNET_ID=$(oci network subnet list --compartment-id "$OCI_TENANCY" --query "data.id" --raw-output 2>/dev/null || echo "")
+
+          # 4. Handle Auto-Network Checks With Force Bypasses
           if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ] || [ "$SUBNET_ID" == "" ]; then
             echo "No network found. Building automated Virtual Cloud Network (VCN)..."
             VCN_ID=$(oci network vcn create --compartment-id "$OCI_TENANCY" --cidr-block "10.0.0.0/16" --display-name "Minecraft_Network" --query "data.id" --raw-output)
@@ -47,22 +51,20 @@ jobs:
             echo "Deploying internet gateway configuration..."
             IG_ID=$(oci network internet-gateway create --compartment-id "$OCI_TENANCY" --vcn-id "$VCN_ID" --is-enabled true --display-name "Minecraft_Gateway" --query "data.id" --raw-output)
             RT_ID=$(oci network vcn get --vcn-id "$VCN_ID" --query "data.\"default-route-table-id\"" --raw-output)
-            
-            # The Critical Fix: Added --force override flag to stop the interactive prompt crash
             oci network route-table update --rt-id "$RT_ID" --route-rules "[{\"cidrBlock\":\"0.0.0.0/0\",\"nextHopIds\":\"$IG_ID\"}]" --force > /dev/null
           else
             echo "Verified active network configuration found: $SUBNET_ID"
           fi
 
-          # 4. Use the absolute fallback image ID string directly to prevent image API scanning bugs
+          # 5. Use the absolute fallback image ID string directly to prevent image API scanning bugs
           IMAGE_ID="ocid1.image.oc1.ap-melbourne-1.aaaaaaaaaxmpxmvyq3y34mzyoxbbykxl23hmdskg7xby6pxt4b7f43y2jmaq"
 
-          # 5. Fetch Availability Domain data string dynamically
-          AD_NAME=$(oci iam availability-domain list --query "data[0].name" --raw-output 2>/dev/null || oci iam availability-domain list --query "data.name" --raw-output)
+          # 6. Fetch Availability Domain data string dynamically
+          AD_NAME=$(oci iam availability-domain list --query "data.name" --raw-output 2>/dev/null || oci iam availability-domain list --query "data.name" --raw-output)
 
           echo "Network configurations locked. Initiating server slot allocation scans for $AD_NAME..."
           
-          # 6. Request the server build directly from native endpoints
+          # 7. Request the server build directly from native endpoints with the fixed SSH public key string parameters
           RESPONSE=$(oci compute instance launch \
             --compartment-id "$OCI_TENANCY" \
             --availability-domain "$AD_NAME" \
@@ -71,13 +73,15 @@ jobs:
             --shape-config '{"ocpus":2,"memoryInGBs":12}' \
             --subnet-id "$SUBNET_ID" \
             --image-id "$IMAGE_ID" \
+            --ssh-authorized-keys "$SSH_PUBLIC_KEY_DATA" \
             --assign-public-ip true 2>&1)
             
-          # 7. Check server volume results cleanly
+          # 8. Check server volume results cleanly
           if echo "$RESPONSE" | grep -E -q "Out of capacity|LimitExceeded|TooManyRequests|404|NotAuthorizedOrNotFound"; then
             echo "STATUS: Out of Capacity in Melbourne. Automated script successfully completed this hours attempt and will cycle again on the next hour."
           elif echo "$RESPONSE" | grep -q "id"; then
-            echo "SUCCESS! Your 12GB high-performance server slot has been claimed successfully!"
+            echo "SUCCESS! Your 12GB high-performance server slot has been claimed successfully! Keep your downloaded 'minecraft_ssh_key' file to log in."
+            echo "$SSH_PUBLIC_KEY_DATA" > ./CLEAN_SERVER_CLAIMED_ALERT.txt
           else
             echo "Oracle Cloud Infrastructure Response Profile: $RESPONSE"
           fi
