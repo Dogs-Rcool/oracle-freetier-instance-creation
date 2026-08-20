@@ -28,22 +28,19 @@ jobs:
           OCI_REGION_IN: ${{ secrets.OCI_REGION_IN }}
           OCI_KEY_IN: ${{ secrets.OCI_KEY_IN }}
         run: |
-          # 1. Create the secure directory Oracle expects
-          mkdir -p ~/.oci
+          # 1. Create the local private key file exactly where the local script expects it
+          echo "$OCI_KEY_IN" > ./private_key.pem
+          chmod 600 ./private_key.pem
           
-          # 2. Write the private key file out to disk
-          echo "$OCI_KEY_IN" > ~/.oci/private_key.pem
-          chmod 600 ~/.oci/private_key.pem
+          # 2. Generate the exact 'oci_config' file path layout the python error requested
+          echo "[DEFAULT]" > ./oci_config
+          echo "user=$OCI_USER_IN" >> ./oci_config
+          echo "fingerprint=$OCI_FINGERPRINT_IN" >> ./oci_config
+          echo "tenancy=$OCI_TENANCY_IN" >> ./oci_config
+          echo "region=$OCI_REGION_IN" >> ./oci_config
+          echo "key_file=./private_key.pem" >> ./oci_config
           
-          # 3. Dynamically generate the precise config profile the Python script reads
-          echo "[DEFAULT]" > ~/.oci/config
-          echo "user=$OCI_USER_IN" >> ~/.oci/config
-          echo "fingerprint=$OCI_FINGERPRINT_IN" >> ~/.oci/config
-          echo "tenancy=$OCI_TENANCY_IN" >> ~/.oci/config
-          echo "region=$OCI_REGION_IN" >> ~/.oci/config
-          echo "key_file=~/.oci/private_key.pem" >> ~/.oci/config
-          
-          # 4. Generate the precise .env file this specific repo script reads to populate main.py variables
+          # 3. Generate the supplementary environment parameters for runtime initialization
           echo "OCI_USER_ID=$OCI_USER_IN" > .env
           echo "OCI_TENANCY_ID=$OCI_TENANCY_IN" >> .env
           echo "OCI_FINGERPRINT=$OCI_FINGERPRINT_IN" >> .env
@@ -56,5 +53,5 @@ jobs:
           echo "DISPLAY_NAME=BeyondDepthsServer" >> .env
           echo "INSTANCES_TO_CREATE=1" >> .env
           
-          # 5. Run the core process
+          # 4. Run the core process
           python main.py
