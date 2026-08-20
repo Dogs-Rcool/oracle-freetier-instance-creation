@@ -1,288 +1,176 @@
-name: OCI VM Creator
+name: OCI Free Tier Instance Creator
 
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 * * * *'
 
+# Prevent two creation attempts from running simultaneously.
+concurrency:
+  group: oci-free-tier-instance-creator
+  cancel-in-progress: false
+
 jobs:
   create-vm:
     runs-on: ubuntu-latest
 
+    # Give each attempt up to 55 minutes.
+    # The hourly schedule then gives us another attempt.
+    timeout-minutes: 55
+
     steps:
-      - name: Install OCI SDK
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install oci
+          pip install -r requirements.txt
 
-      - name: Attempt VM Creation
+      - name: Create OCI configuration
         env:
           OCI_USER: ${{ secrets.OCI_USER_IN }}
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT_IN }}
           OCI_TENANCY: ${{ secrets.OCI_TENANCY_IN }}
           OCI_REGION: ${{ secrets.OCI_REGION_IN }}
           OCI_KEY: ${{ secrets.OCI_KEY_IN }}
-          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
         run: |
-          cat > script.py << 'EOF'
-          import os
+          set -euo pipefail
+
+          printf '%s\n' "$OCI_KEY" > "$GITHUB_WORKSPACE/oci_api_private_key.pem"
+          chmod 600 "$GITHUB_WORKSPACE/oci_api_private_key.pem"
+
+          cat > "$GITHUB_WORKSPACE/oci_config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$GITHUB_WORKSPACE/oci_api_private_key.pem
+          EOF
+
+          chmod 600 "$GITHUB_WORKSPACE/oci_config"
+
+          echo "OCI configuration created."
+
+      - name: Find existing Minecraft subnet
+        env:
+          OCI_USER: ${{ secrets.OCI_USER_IN }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT_IN }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY_IN }}
+          OCI_REGION: ${{ secrets.OCI_REGION_IN }}
+          OCI_KEY: ${{ secrets.OCI_KEY_IN }}
+        run: |
+          set -euo pipefail
+
+          python <<'PY'
           import oci
+          import os
+          import sys
 
           config = {
               "user": os.environ["OCI_USER"].strip(),
               "fingerprint": os.environ["OCI_FINGERPRINT"].strip(),
               "tenancy": os.environ["OCI_TENANCY"].strip(),
               "region": os.environ["OCI_REGION"].strip(),
-              "key_content": os.environ["OCI_KEY"]
+              "key_content": os.environ["OCI_KEY"],
           }
 
-          compartment_id = config["tenancy"]
-          shape = "VM.Standard.A1.Flex"
+          tenancy = config["tenancy"]
 
-          compute = oci.core.ComputeClient(config)
           network = oci.core.VirtualNetworkClient(config)
-          identity = oci.identity.IdentityClient(config)
-
-          print("Connected to OCI")
-          print("Region:", config["region"])
-          print("Target shape:", shape)
-
-          # ---------------------------------------------------------
-          # 1. Check whether our server already exists
-          # ---------------------------------------------------------
-
-          instances = compute.list_instances(
-              compartment_id=compartment_id
-          ).data
-
-          for instance in instances:
-              if (
-                  instance.display_name == "BeyondDepthsServer"
-                  and instance.lifecycle_state != "TERMINATED"
-              ):
-                  print(
-                      f"Instance already exists: {instance.id}"
-                  )
-                  print(
-                      f"State: {instance.lifecycle_state}"
-                  )
-                  print("Nothing to do.")
-                  exit(0)
-
-          # ---------------------------------------------------------
-          # 2. Find an availability domain
-          # ---------------------------------------------------------
-
-          availability_domains = identity.list_availability_domains(
-              compartment_id
-          ).data
-
-          if not availability_domains:
-              raise Exception("No availability domains found.")
-
-          ad = availability_domains[0].name
-
-          print("Using AD:", ad)
-
-          # ---------------------------------------------------------
-          # 3. Find Ubuntu 24.04 images COMPATIBLE with A1.Flex
-          # ---------------------------------------------------------
-
-          images = compute.list_images(
-              compartment_id=compartment_id,
-              operating_system="Canonical Ubuntu",
-              operating_system_version="24.04",
-              shape=shape
-          ).data
-
-          if not images:
-              raise Exception(
-                  "No Ubuntu 24.04 image compatible with "
-                  "VM.Standard.A1.Flex was found."
-              )
-
-          # Prefer aarch64 images explicitly.
-          arm_images = [
-              image for image in images
-              if "aarch64" in (image.display_name or "").lower()
-          ]
-
-          if arm_images:
-              images = arm_images
-
-          image = sorted(
-              images,
-              key=lambda x: x.time_created or "",
-              reverse=True
-          )[0]
-
-          print("Selected image:", image.display_name)
-          print("Image OCID:", image.id)
-
-          # ---------------------------------------------------------
-          # 4. Verify the image actually supports the A1 shape
-          # ---------------------------------------------------------
-
-          compatible_shapes = compute.list_image_shape_compatibility_entries(
-              image.id
-          ).data
-
-          compatible_shape_names = [
-              entry.shape
-              for entry in compatible_shapes
-          ]
-
-          if shape not in compatible_shape_names:
-              raise Exception(
-                  f"Safety check failed: {image.display_name} "
-                  f"does not list {shape} as compatible."
-              )
-
-          print("Image compatibility check: PASSED")
-
-          # ---------------------------------------------------------
-          # 5. Get an existing subnet
-          # ---------------------------------------------------------
 
           subnets = network.list_subnets(
-              compartment_id=compartment_id
+              compartment_id=tenancy
           ).data
 
-          if not subnets:
-              raise Exception(
-                  "No subnet exists in this compartment."
-              )
-
-          # Prefer an available subnet.
-          usable_subnets = [
+          usable = [
               subnet for subnet in subnets
               if subnet.lifecycle_state == "AVAILABLE"
           ]
 
-          if not usable_subnets:
-              raise Exception(
-                  "Subnets exist, but none are AVAILABLE."
-              )
-
-          # If there is a Minecraft subnet, use it.
-          minecraft_subnets = [
-              subnet for subnet in usable_subnets
+          minecraft = [
+              subnet for subnet in usable
               if "minecraft" in (subnet.display_name or "").lower()
           ]
 
-          if minecraft_subnets:
-              subnet = minecraft_subnets[0]
+          if len(minecraft) == 1:
+              subnet = minecraft[0]
+
+          elif len(minecraft) > 1:
+              print("ERROR: Multiple Minecraft subnets found:")
+              for subnet in minecraft:
+                  print(f"  {subnet.display_name}: {subnet.id}")
+              sys.exit(1)
+
+          elif len(usable) == 1:
+              subnet = usable[0]
+
           else:
-              # Refuse to silently guess if multiple unrelated
-              # networks exist.
-              if len(usable_subnets) > 1:
-                  print("Multiple usable subnets found:")
+              print("ERROR: Could not safely determine which subnet to use.")
+              print("Available subnets:")
+              for subnet in usable:
+                  print(f"  {subnet.display_name}: {subnet.id}")
+              sys.exit(1)
 
-                  for s in usable_subnets:
-                      print(
-                          f"  {s.display_name} -> {s.id}"
-                      )
+          print(f"Using subnet: {subnet.display_name}")
+          print(f"Subnet OCID: {subnet.id}")
 
-                  raise Exception(
-                      "Multiple subnets found and none were "
-                      "clearly identified as the Minecraft subnet. "
-                      "Refusing to guess."
-                  )
+          with open("subnet_id.txt", "w") as f:
+              f.write(subnet.id)
+          PY
 
-              subnet = usable_subnets[0]
+      - name: Configure instance creation
+        run: |
+          set -euo pipefail
 
-          subnet_id = subnet.id
+          SUBNET_ID="$(cat subnet_id.txt)"
 
-          print("Using subnet:", subnet.display_name)
-          print("Subnet OCID:", subnet_id)
-
-          # ---------------------------------------------------------
-          # 6. SSH public key
-          # ---------------------------------------------------------
-
-          ssh_public_key = os.environ.get(
-              "SSH_PUBLIC_KEY",
-              ""
-          ).strip()
-
-          if not ssh_public_key:
-              raise Exception(
-                  "SSH_PUBLIC_KEY GitHub secret is missing."
-              )
-
-          # ---------------------------------------------------------
-          # 7. Build instance request
-          # ---------------------------------------------------------
-
-          details = oci.core.models.LaunchInstanceDetails(
-              compartment_id=compartment_id,
-              availability_domain=ad,
-              display_name="BeyondDepthsServer",
-              shape=shape,
-
-              shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
-                  ocpus=2,
-                  memory_in_gbs=12
-              ),
-
-              source_details=oci.core.models.InstanceSourceViaImageDetails(
-                  image_id=image.id
-              ),
-
-              create_vnic_details=oci.core.models.CreateVnicDetails(
-                  subnet_id=subnet_id,
-                  assign_public_ip=True
-              ),
-
-              metadata={
-                  "ssh_authorized_keys": ssh_public_key
-              }
-          )
-
-          # ---------------------------------------------------------
-          # 8. Attempt launch
-          # ---------------------------------------------------------
-
-          try:
-              print("Attempting to launch VM...")
-
-              response = compute.launch_instance(details)
-
-              instance = response.data
-
-              print("========================================")
-              print("SUCCESS!")
-              print("Instance ID:", instance.id)
-              print("State:", instance.lifecycle_state)
-              print("========================================")
-
-          except oci.exceptions.ServiceError as e:
-
-              print("========================================")
-              print("OCI LAUNCH ERROR")
-              print("Status:", e.status)
-              print("Code:", e.code)
-              print("Message:", e.message)
-              print("Request ID:", e.request_id)
-              print("========================================")
-
-              message = str(e.message).lower()
-
-              if (
-                  "out of capacity" in message
-                  or "capacity" in message
-                  or e.code == "InternalError"
-              ):
-                  print(
-                      "No suitable A1 capacity is currently available."
-                  )
-                  print(
-                      "The next scheduled run will try again."
-                  )
-                  exit(0)
-
-              raise
-
+          cat > oci.env <<EOF
+          OCI_CONFIG=$GITHUB_WORKSPACE/oci_config
+          OCT_FREE_AD=AD-1
+          DISPLAY_NAME=BeyondDepthsServer
+          OCI_COMPUTE_SHAPE=VM.Standard.A1.Flex
+          SECOND_MICRO_INSTANCE=False
+          REQUEST_WAIT_TIME_SECS=60
+          SSH_AUTHORIZED_KEYS_FILE=$GITHUB_WORKSPACE/id_rsa.pub
+          OCI_SUBNET_ID=$SUBNET_ID
+          OCI_IMAGE_ID=
+          OPERATING_SYSTEM=Canonical Ubuntu
+          OS_VERSION=22.04
+          ASSIGN_PUBLIC_IP=true
+          BOOT_VOLUME_SIZE=50
+          NOTIFY_EMAIL=False
+          EMAIL=
+          EMAIL_PASSWORD=
+          DISCORD_WEBHOOK=
           EOF
 
-          python script.py
+          echo "Instance configuration:"
+          grep -E '^(OCT_FREE_AD|DISPLAY_NAME|OCI_COMPUTE_SHAPE|REQUEST_WAIT_TIME_SECS|OCI_SUBNET_ID|OPERATING_SYSTEM|OS_VERSION|ASSIGN_PUBLIC_IP|BOOT_VOLUME_SIZE)=' oci.env
+
+      - name: Attempt A1 instance creation
+        run: |
+          python main.py
+
+      - name: Save generated SSH key
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeyondDepthsServer-ssh-key
+          path: |
+            id_rsa_private
+            id_rsa.pub
+          retention-days: 7
+
+      - name: Save creation information
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeyondDepthsServer-details
+          path: |
+            INSTANCE_CREATED
+            setup_and_info.log
+            launch_instance.log
+            images_list.json
+          retention-days: 7
