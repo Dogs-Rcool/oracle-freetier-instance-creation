@@ -2,22 +2,19 @@ name: Try to Create OCI VM
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 * * * *' # Automatically runs every hour in the background
+    - cron: '0 * * * *' # Automatically triggers an activation run every hour in the background
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
     steps:
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install Dependencies
+      - name: Setup Oracle OCI CLI Engine
         run: |
-          pip install oci
+          # Pulls the stable native installer engine directly from official distribution routes
+          curl -sL https://githubusercontent.com | bash -s -- --accept-all-defaults
+          echo "/home/runner/bin" >> $GITHUB_PATH
 
-      - name: Run Instance Catcher
+      - name: Deploy Secure Access Profile
         env:
           OCI_USER: ${{ secrets.OCI_USER_IN }}
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT_IN }}
@@ -25,52 +22,58 @@ jobs:
           OCI_REGION: ${{ secrets.OCI_REGION_IN }}
           OCI_KEY: ${{ secrets.OCI_KEY_IN }}
         run: |
-          python -c '
-          import os, oci
+          mkdir -p ~/.oci
+          echo "$OCI_KEY" > ~/.oci/private_key.pem
+          chmod 600 ~/.oci/private_key.pem
           
-          config = {
-              "user": os.environ["OCI_USER"].strip(),
-              "fingerprint": os.environ["OCI_FINGERPRINT"].strip(),
-              "tenancy": os.environ["OCI_TENANCY"].strip(),
-              "region": os.environ["OCI_REGION"].strip(),
-              "key_content": os.environ["OCI_KEY"].strip()
-          }
+          # Sets up the exact identity block the infrastructure layer utilizes
+          echo "[DEFAULT]" > ~/.oci/config
+          echo "user=$OCI_USER" >> ~/.oci/config
+          echo "fingerprint=$OCI_FINGERPRINT" >> ~/.oci/config
+          echo "tenancy=$OCI_TENANCY" >> ~/.oci/config
+          echo "region=$OCI_REGION" >> ~/.oci/config
+          echo "key_file=~/.oci/private_key.pem" >> ~/.oci/config
+          chmod 600 ~/.oci/config
+
+      - name: Run Dedicated Boot Interceptor
+        env:
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY_IN }}
+        run: |
+          # 1. Pull the official account subnet configuration mapping using direct platform commands
+          SUBNET_ID=$(oci network subnet list --compartment-id "$OCI_TENANCY" --query "data[0].id" --raw-output)
+          IMAGE_ID=$(oci compute image list --compartment-id "$OCI_TENANCY" --operating-system "Canonical Ubuntu" --operating-system-version "22.04" --query "data[0].id" --raw-output 2>/dev/null || echo "")
           
-          print("Connecting to Oracle API...")
-          compute_client = oci.core.ComputeClient(config)
+          if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ]; then
+            echo "Network error: Baseline public subnet missing. Please run the manual setup on the Oracle Console webpage once to create network paths."
+            exit 1
+          fi
           
-          # Fetch your account default subnet so the request formatting passes structural parameters
-          network_client = oci.core.VirtualNetworkClient(config)
-          try:
-              vcns = network_client.list_vcns(config["tenancy"]).data
-              if not vcns:
-                  print("Error: No Virtual Cloud Network found in your Oracle account. Please manually click Create VM Instance once to auto-generate default network structures.")
-                  exit(1)
-              subnets = network_client.list_subnets(config["tenancy"], vcn_id=vcns[0].id).data
-              target_subnet_id = subnets[0].id
-          except Exception as e:
-              print(f"Network Lookup Error: {e}")
-              exit(1)
+          # Fallback structural block to catch available processing architectures
+          if [ -z "$IMAGE_ID" ] || [ "$IMAGE_ID" == "null" ]; then
+            IMAGE_ID=$(oci compute image list --compartment-id "$OCI_TENANCY" --shape "VM.Standard.A1.Flex" --query "data[0].id" --raw-output | head -n 1)
+          fi
+
+          # 2. Fetch Availability Domain dynamically
+          AD_NAME=$(oci iam availability-domain list --query "data[0].name" --raw-output)
+
+          echo "Identity configurations validated. Initiating slot availability scans for $AD_NAME..."
           
-          # Map structural build settings explicitly matching OCI API expectations
-          instance_details = oci.core.models.LaunchInstanceDetails(
-              compartment_id=config["tenancy"],
-              shape="VM.Standard.A1.Flex",
-              display_name="BeyondDepthsServer",
-              create_vnic_details=oci.core.models.CreateVnicDetails(
-                  subnet_id=target_subnet_id,
-                  assign_public_ip=True
-              ),
-              shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(ocpus=2, memory_in_gbs=12)
-          )
-          
-          print("Scanning for open slots in your region...")
-          try:
-              compute_client.launch_instance(instance_details)
-              print("SUCCESS! Your high-RAM server slot has been claimed successfully.")
-          except oci.exceptions.ServiceError as e:
-              if e.status == 404 or "Out of capacity" in str(e.message) or "LimitExceeded" in str(e.code):
-                  print(f"STATUS: Out of Capacity in your region. Retrying on the next hourly clock trigger.")
-              else:
-                  print(f"Oracle API Status Code {e.status}: {e.code} - {e.message}")
-          '
+          # 3. Run the secure generation query directly against native endpoints
+          RESPONSE=$(oci compute instance launch \
+            --compartment-id "$OCI_TENANCY" \
+            --availability-domain "$AD_NAME" \
+            --display-name "BeyondDepthsServer" \
+            --shape "VM.Standard.A1.Flex" \
+            --shape-config '{"ocpus":2,"memoryInGBs":12}' \
+            --subnet-id "$SUBNET_ID" \
+            --image-id "$IMAGE_ID" \
+            --assign-public-ip true 2>&1)
+            
+          # 4. Handle data center volume notifications gracefully
+          if echo "$RESPONSE" | grep -E -q "Out of capacity|LimitExceeded|TooManyRequests|404"; then
+            echo "STATUS: Out of Capacity in your region. Retrying on the next hourly clock trigger."
+          elif echo "$RESPONSE" | grep -q "id"; then
+            echo "SUCCESS! Your high-RAM server slot has been claimed successfully."
+          else
+            echo "Platform Warning Log: $RESPONSE"
+          fi
