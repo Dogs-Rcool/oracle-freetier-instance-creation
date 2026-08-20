@@ -1,0 +1,37 @@
+name: Try to Create OCI VM
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 * * * *' # This forces the script to run automatically every hour
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-numeric-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install oci
+
+      - name: Run Instance Catcher
+        env:
+          OCI_USER: ${{ secrets.OCI_USER_IN }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT_IN }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY_IN }}
+          OCI_REGION: ${{ secrets.OCI_REGION_IN }}
+          OCI_KEY: ${{ secrets.OCI_KEY_IN }}
+        run: |
+          # Creates the local private key file the python script expects
+          echo "$OCI_KEY" > ./private_key.pem
+          chmod 600 ./private_key.pem
+          
+          # Runs the bot script
+          python bot.py
+
