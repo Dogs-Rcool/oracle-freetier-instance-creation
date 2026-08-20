@@ -5,7 +5,6 @@ on:
   schedule:
     - cron: '0 * * * *'
 
-# Prevent two creation attempts from running simultaneously.
 concurrency:
   group: oci-free-tier-instance-creator
   cancel-in-progress: false
@@ -13,9 +12,6 @@ concurrency:
 jobs:
   create-vm:
     runs-on: ubuntu-latest
-
-    # Give each attempt up to 55 minutes.
-    # The hourly schedule then gives us another attempt.
     timeout-minutes: 55
 
     steps:
@@ -51,9 +47,7 @@ jobs:
 
           chmod 600 "$GITHUB_WORKSPACE/oci_config"
 
-          echo "OCI configuration created."
-
-      - name: Find existing Minecraft subnet
+      - name: Find existing Minecraft public subnet
         env:
           OCI_USER: ${{ secrets.OCI_USER_IN }}
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT_IN }}
@@ -76,45 +70,34 @@ jobs:
               "key_content": os.environ["OCI_KEY"],
           }
 
-          tenancy = config["tenancy"]
-
           network = oci.core.VirtualNetworkClient(config)
 
           subnets = network.list_subnets(
-              compartment_id=tenancy
+              compartment_id=config["tenancy"]
           ).data
 
-          usable = [
+          matches = [
               subnet for subnet in subnets
-              if subnet.lifecycle_state == "AVAILABLE"
+              if (
+                  subnet.display_name == "Minecraft_Public_Subnet"
+                  and subnet.lifecycle_state == "AVAILABLE"
+                  and subnet.prohibit_public_ip_on_vnic is False
+              )
           ]
 
-          minecraft = [
-              subnet for subnet in usable
-              if "minecraft" in (subnet.display_name or "").lower()
-          ]
-
-          if len(minecraft) == 1:
-              subnet = minecraft[0]
-
-          elif len(minecraft) > 1:
-              print("ERROR: Multiple Minecraft subnets found:")
-              for subnet in minecraft:
-                  print(f"  {subnet.display_name}: {subnet.id}")
+          if len(matches) == 0:
+              print("ERROR: Minecraft_Public_Subnet was not found.")
               sys.exit(1)
 
-          elif len(usable) == 1:
-              subnet = usable[0]
-
-          else:
-              print("ERROR: Could not safely determine which subnet to use.")
-              print("Available subnets:")
-              for subnet in usable:
-                  print(f"  {subnet.display_name}: {subnet.id}")
+          if len(matches) > 1:
+              print("ERROR: Multiple Minecraft_Public_Subnet resources found.")
               sys.exit(1)
 
-          print(f"Using subnet: {subnet.display_name}")
-          print(f"Subnet OCID: {subnet.id}")
+          subnet = matches[0]
+
+          print("Using existing public Minecraft subnet:")
+          print("Name:", subnet.display_name)
+          print("OCID:", subnet.id)
 
           with open("subnet_id.txt", "w") as f:
               f.write(subnet.id)
@@ -146,14 +129,16 @@ jobs:
           DISCORD_WEBHOOK=
           EOF
 
-          echo "Instance configuration:"
-          grep -E '^(OCT_FREE_AD|DISPLAY_NAME|OCI_COMPUTE_SHAPE|REQUEST_WAIT_TIME_SECS|OCI_SUBNET_ID|OPERATING_SYSTEM|OS_VERSION|ASSIGN_PUBLIC_IP|BOOT_VOLUME_SIZE)=' oci.env
+          echo "Configuration ready."
+          echo "Shape: VM.Standard.A1.Flex"
+          echo "OS: Ubuntu 22.04"
+          echo "Subnet: $SUBNET_ID"
 
       - name: Attempt A1 instance creation
         run: |
           python main.py
 
-      - name: Save generated SSH key
+      - name: Save SSH keys
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -163,7 +148,7 @@ jobs:
             id_rsa.pub
           retention-days: 7
 
-      - name: Save creation information
+      - name: Save instance information
         if: success()
         uses: actions/upload-artifact@v4
         with:
