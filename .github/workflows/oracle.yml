@@ -32,30 +32,37 @@ jobs:
           python -c '
           import os
           
-          # Write the private key file
+          # Clean inputs by stripping whitespaces securely
+          user_id = os.environ["OCI_USER_IN"].strip()
+          fingerprint = os.environ["OCI_FINGERPRINT_IN"].strip()
+          tenancy = os.environ["OCI_TENANCY_IN"].strip()
+          region = os.environ["OCI_REGION_IN"].strip()
+          private_key = os.environ["OCI_KEY_IN"].strip()
+          
+          # Write the private key file out to disk
           with open("private_key.pem", "w") as f:
-              f.write(os.environ["OCI_KEY_IN"].strip())
+              f.write(private_key)
           os.chmod("private_key.pem", 0o600)
           
-          # Write the oci_config file exactly how the OCI SDK requires it
+          # Write the oci_config file without nested backslashes
           config_content = (
               "[DEFAULT]\n"
-              f"user={os.environ[\"OCI_USER_IN\"].strip()}\n"
-              f"fingerprint={os.environ[\"OCI_FINGERPRINT_IN\"].strip()}\n"
-              f"tenancy={os.environ[\"OCI_TENANCY_IN\"].strip()}\n"
-              f"region={os.environ[\"OCI_REGION_IN\"].strip()}\n"
+              f"user={user_id}\n"
+              f"fingerprint={fingerprint}\n"
+              f"tenancy={tenancy}\n"
+              f"region={region}\n"
               "key_file=./private_key.pem\n"
           )
           with open("oci_config", "w") as f:
               f.write(config_content)
               
-          # Write the environment runtime configurations
+          # Write the environment runtime configurations for main.py
           env_content = (
-              f"OCI_USER_ID={os.environ[\"OCI_USER_IN\"].strip()}\n"
-              f"OCI_TENANCY_ID={os.environ[\"OCI_TENANCY_IN\"].strip()}\n"
-              f"OCI_FINGERPRINT={os.environ[\"OCI_FINGERPRINT_IN\"].strip()}\n"
-              f"OCI_REGION={os.environ[\"OCI_REGION_IN\"].strip()}\n"
-              f"OCI_COMPARTMENT_ID={os.environ[\"OCI_TENANCY_IN\"].strip()}\n"
+              f"OCI_USER_ID={user_id}\n"
+              f"OCI_TENANCY_ID={tenancy}\n"
+              f"OCI_FINGERPRINT={fingerprint}\n"
+              f"OCI_REGION={region}\n"
+              f"OCI_COMPARTMENT_ID={tenancy}\n"
               "OCI_SHAPE=VM.Standard.A1.Flex\n"
               "OCI_OCPUS=2\n"
               "OCI_MEMORY_IN_GBS=12\n"
