@@ -28,7 +28,6 @@ jobs:
           python -c '
           import os, oci
           
-          # Initialize the connection purely from memory, skipping all config files entirely
           config = {
               "user": os.environ["OCI_USER"].strip(),
               "fingerprint": os.environ["OCI_FINGERPRINT"].strip(),
@@ -40,22 +39,38 @@ jobs:
           print("Connecting to Oracle API...")
           compute_client = oci.core.ComputeClient(config)
           
-          # Configure the exact Always-Free Ampere spec requirements for Beyond Depths
+          # Fetch your account default subnet so the request formatting passes structural parameters
+          network_client = oci.core.VirtualNetworkClient(config)
+          try:
+              vcns = network_client.list_vcns(config["tenancy"]).data
+              if not vcns:
+                  print("Error: No Virtual Cloud Network found in your Oracle account. Please manually click Create VM Instance once to auto-generate default network structures.")
+                  exit(1)
+              subnets = network_client.list_subnets(config["tenancy"], vcn_id=vcns[0].id).data
+              target_subnet_id = subnets[0].id
+          except Exception as e:
+              print(f"Network Lookup Error: {e}")
+              exit(1)
+          
+          # Map structural build settings explicitly matching OCI API expectations
           instance_details = oci.core.models.LaunchInstanceDetails(
               compartment_id=config["tenancy"],
               shape="VM.Standard.A1.Flex",
               display_name="BeyondDepthsServer",
+              create_vnic_details=oci.core.models.CreateVnicDetails(
+                  subnet_id=target_subnet_id,
+                  assign_public_ip=True
+              ),
               shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(ocpus=2, memory_in_gbs=12)
           )
           
           print("Scanning for open slots in your region...")
           try:
-              # This sends a direct request bypassing any broken third-party repositories
               compute_client.launch_instance(instance_details)
               print("SUCCESS! Your high-RAM server slot has been claimed successfully.")
           except oci.exceptions.ServiceError as e:
-              if e.status == 404 or "Out of capacity" in str(e.message):
+              if e.status == 404 or "Out of capacity" in str(e.message) or "LimitExceeded" in str(e.code):
                   print(f"STATUS: Out of Capacity in your region. Retrying on the next hourly clock trigger.")
               else:
-                  print(f"Oracle Error Code: {e.code} - {e.message}")
+                  print(f"Oracle API Status Code {e.status}: {e.code} - {e.message}")
           '
