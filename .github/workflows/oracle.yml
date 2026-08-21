@@ -47,189 +47,8 @@ jobs:
 
           chmod 600 "$GITHUB_WORKSPACE/oci_config"
 
-      - name: Find correct Minecraft public subnet
-        env:
-          OCI_USER: ${{ secrets.OCI_USER_IN }}
-          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT_IN }}
-          OCI_TENANCY: ${{ secrets.OCI_TENANCY_IN }}
-          OCI_REGION: ${{ secrets.OCI_REGION_IN }}
-          OCI_KEY: ${{ secrets.OCI_KEY_IN }}
+      - name: Configure OCI Free Tier instance
         run: |
-          set -euo pipefail
-
-          python <<'PY'
-          import oci
-          import os
-          import sys
-
-          config = {
-              "user": os.environ["OCI_USER"].strip(),
-              "fingerprint": os.environ["OCI_FINGERPRINT"].strip(),
-              "tenancy": os.environ["OCI_TENANCY"].strip(),
-              "region": os.environ["OCI_REGION"].strip(),
-              "key_content": os.environ["OCI_KEY"],
-          }
-
-          compartment_id = config["tenancy"]
-
-          network = oci.core.VirtualNetworkClient(config)
-
-          print("Searching for Minecraft_Automation_Network...")
-
-          vcns = network.list_vcns(
-              compartment_id=compartment_id
-          ).data
-
-          matching_vcns = [
-              vcn for vcn in vcns
-              if vcn.display_name == "Minecraft_Automation_Network"
-          ]
-
-          if not matching_vcns:
-              print("ERROR: Minecraft_Automation_Network was not found.")
-              sys.exit(1)
-
-          if len(matching_vcns) > 1:
-              print("ERROR: Multiple Minecraft_Automation_Network VCNs found.")
-              for vcn in matching_vcns:
-                  print(f"  {vcn.id}")
-              sys.exit(1)
-
-          vcn = matching_vcns[0]
-
-          print("Using VCN:")
-          print("  Name:", vcn.display_name)
-          print("  OCID:", vcn.id)
-
-          print()
-          print("Searching for Minecraft_Public_Subnet...")
-
-          subnets = network.list_subnets(
-              compartment_id=compartment_id,
-              vcn_id=vcn.id
-          ).data
-
-          candidates = [
-              subnet for subnet in subnets
-              if (
-                  subnet.display_name == "Minecraft_Public_Subnet"
-                  and subnet.lifecycle_state == "AVAILABLE"
-                  and subnet.prohibit_public_ip_on_vnic is False
-              )
-          ]
-
-          if not candidates:
-              print(
-                  "ERROR: No available public Minecraft subnet "
-                  "was found inside Minecraft_Automation_Network."
-              )
-              sys.exit(1)
-
-          print(f"Found {len(candidates)} matching subnet(s).")
-
-          # Check which candidates actually have an Internet Gateway route.
-          public_candidates = []
-
-          for subnet in candidates:
-
-              route_table_id = subnet.route_table_id
-
-              if not route_table_id:
-                  print(
-                      f"Skipping {subnet.id}: no route table."
-                  )
-                  continue
-
-              route_table = network.get_route_table(
-                  route_table_id
-              ).data
-
-              has_internet_gateway = False
-
-              for rule in route_table.route_rules:
-
-                  if (
-                      rule.destination == "0.0.0.0/0"
-                      and rule.next_hop_id
-                  ):
-                      try:
-                          gateway = network.get_internet_gateway(
-                              rule.next_hop_id
-                          ).data
-
-                          if (
-                              gateway.lifecycle_state == "AVAILABLE"
-                              and gateway.is_enabled
-                          ):
-                              has_internet_gateway = True
-                              break
-
-                      except Exception:
-                          pass
-
-              if has_internet_gateway:
-                  public_candidates.append(subnet)
-
-          if len(public_candidates) == 1:
-
-              subnet = public_candidates[0]
-
-          elif len(public_candidates) > 1:
-
-              print(
-                  "Multiple public Minecraft subnets have "
-                  "Internet Gateway routes:"
-              )
-
-              for subnet in public_candidates:
-                  print(
-                      f"  {subnet.display_name}: {subnet.id}"
-                  )
-
-              print(
-                  "ERROR: Refusing to guess between multiple "
-                  "public subnets."
-              )
-
-              sys.exit(1)
-
-          else:
-
-              print(
-                  "ERROR: Minecraft_Public_Subnet exists, "
-                  "but none has an active Internet Gateway route."
-              )
-
-              print("Candidates:")
-
-              for subnet in candidates:
-                  print(
-                      f"  {subnet.display_name}: {subnet.id}"
-                  )
-
-              sys.exit(1)
-
-          print()
-          print("========================================")
-          print("CORRECT PUBLIC SUBNET FOUND")
-          print("========================================")
-          print("Subnet:", subnet.display_name)
-          print("Subnet OCID:", subnet.id)
-          print("VCN:", vcn.display_name)
-          print("VCN OCID:", vcn.id)
-          print("========================================")
-
-          with open("subnet_id.txt", "w") as f:
-              f.write(subnet.id)
-
-          PY
-
-      - name: Configure instance creation
-        run: |
-          set -euo pipefail
-
-          SUBNET_ID="$(cat subnet_id.txt)"
-
           cat > oci.env <<EOF
           OCI_CONFIG=$GITHUB_WORKSPACE/oci_config
           OCT_FREE_AD=AD-1
@@ -238,7 +57,7 @@ jobs:
           SECOND_MICRO_INSTANCE=False
           REQUEST_WAIT_TIME_SECS=60
           SSH_AUTHORIZED_KEYS_FILE=$GITHUB_WORKSPACE/id_rsa.pub
-          OCI_SUBNET_ID=$SUBNET_ID
+          OCI_SUBNET_ID=ocid1.subnet.oc1.ap-melbourne-1.aaaaaaaaubv3oyd5ubfzr76a5irhvz2eagyoy7dpmt3tcr5maukfztg2vyea
           OCI_IMAGE_ID=
           OPERATING_SYSTEM=Canonical Ubuntu
           OS_VERSION=22.04
@@ -250,12 +69,12 @@ jobs:
           DISCORD_WEBHOOK=
           EOF
 
-          echo "Configuration ready."
+          echo "OCI configuration ready."
           echo "Shape: VM.Standard.A1.Flex"
           echo "OS: Ubuntu 22.04"
-          echo "Subnet: $SUBNET_ID"
+          echo "Subnet: Minecraft_Public_Subnet"
 
-      - name: Attempt A1 instance creation
+      - name: Run repository instance creator
         run: |
           python main.py
 
